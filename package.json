@@ -4,13 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start:dev": "nodemon",
-    "build": "tsc",
-    "lint": "eslint . --ext .ts",
-    "lint-fix": "eslint . --ext .ts --fix",
-    "start": "PORT=3000 node build/app.js"
+    "start": "nodemon --exitcrash --signal SIGINT -e ts --exec ts-node src/app.ts"
   },
+  
   "author": "",
   "license": "ISC",
   "devDependencies": {
