@@ -92,37 +92,50 @@ app.post('/identify', (req, res)=>{
     });
 
     getCountToUpdate((count: any)=>{
-        if (count != null){
-            connection.query(`UPDATE Contact
-            SET linkedId = (
-                SELECT linkedId
-                FROM (
-                    SELECT DISTINCT c1.linkedId AS linkedId
-                    FROM Contact c1
-                    WHERE c1.email = "${email}" OR c1.phoneNumber = ${phoneNumber}
-                    ORDER BY c1.linkedId
-                    LIMIT 1 OFFSET 1
-                ) AS subquery
+        if (count != null && count>=0){
+            connection.query(`WITH headSubquery AS (
+                SELECT 
+                CASE
+                    WHEN (SELECT linkedId
+                        FROM (SELECT DISTINCT linkedId
+                            FROM Contact
+                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            ORDER BY linkedId
+                            LIMIT 1) AS subquery) IS NULL
+                    THEN (SELECT id as variable
+                          FROM (SELECT DISTINCT id
+                                FROM Contact
+                                WHERE email = "${email}" OR phoneNumber = ${phoneNumber}
+                                ORDER BY id
+                                LIMIT 1) AS subquery)
+                    ELSE (SELECT linkedId as variable
+                        FROM (SELECT DISTINCT linkedId
+                            FROM Contact
+                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            ORDER BY linkedId
+                            LIMIT 1) AS subquery)
+                END as variable
             )
-            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber})
-            AND (linkedId IN (
-                SELECT linkedIds
-                FROM (
-                    SELECT DISTINCT c1.linkedId AS linkedIds
-                    FROM Contact c1
-                    WHERE c1.email = "${email}" OR c1.phoneNumber = ${phoneNumber}
-                    ORDER BY c1.linkedId
-                    LIMIT 2, ${count}
-                ) AS subquery) OR (linkPrecedence = 'primary' AND id != (
-                SELECT linkedId
-                FROM (
-                    SELECT DISTINCT c1.linkedId AS linkedId
-                    FROM Contact c1
-                    WHERE c1.email = "${email}" OR c1.phoneNumber = ${phoneNumber}
-                    ORDER BY c1.linkedId
-                    LIMIT 1 OFFSET 1
-                ) AS subquery
-            ))); `, (err: any, results: any) => {
+            
+            
+            UPDATE Contact
+            SET linkedId = (
+                Select variable FROM headSubquery
+            )
+            WHERE (
+                linkedId IN (
+                    SELECT linkedId
+                    FROM (
+                        SELECT id as linkedId
+                        FROM Contact
+                        WHERE (email = "${email}" OR phoneNumber = ${phoneNumber})
+                        ORDER BY linkedId
+                    ) AS subquery
+                )
+                OR 
+                ((email = "${email}" OR phoneNumber = ${phoneNumber}) AND 
+                (linkPrecedence = 'primary' AND id != (select variable from headSubquery))
+            ));`, (err: any, results: any) => {
                 console.log('Secondary Update Query start');
                 if (err) {
                     console.error('Error executing the query:', err);
@@ -134,17 +147,30 @@ app.post('/identify', (req, res)=>{
             });
 
             connection.query(`UPDATE Contact SET linkPrecedence = 'secondary' 
-                WHERE email = '${email}' OR phoneNumber = ${phoneNumber}
-                AND (linkPrecedence = 'primary' AND id != (
-                    SELECT linkedId
-                    FROM (
-                        SELECT DISTINCT c1.linkedId AS linkedId
-                        FROM Contact c1
-                        WHERE c1.email = '${email}' OR c1.phoneNumber = ${phoneNumber}
-                        ORDER BY c1.linkedId
-                        LIMIT 1 OFFSET 1
-                    ) AS subquery
-                ));`, (err: any, results: any) => {
+            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber})
+            AND (linkPrecedence = 'primary' AND id != (
+                SELECT 
+                CASE
+                    WHEN (SELECT linkedId
+                        FROM (SELECT DISTINCT linkedId
+                            FROM Contact
+                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            ORDER BY linkedId
+                            LIMIT 1) AS subquery) IS NULL
+                    THEN (SELECT id as variable
+                          FROM (SELECT DISTINCT id
+                                FROM Contact
+                                WHERE email = "${email}" OR phoneNumber = ${phoneNumber}
+                                ORDER BY id
+                                LIMIT 1) AS subquery)
+                    ELSE (SELECT linkedId as variable
+                        FROM (SELECT DISTINCT linkedId
+                            FROM Contact
+                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            ORDER BY linkedId
+                            LIMIT 1) AS subquery)
+                END
+            ));`, (err: any, results: any) => {
                 console.log('Second Secondary Update Query start');
                 if (err) {
                     console.error('Error executing the query:', err);
@@ -161,11 +187,13 @@ app.post('/identify', (req, res)=>{
 
 
     getIdentity((error: any, identity: any) => {
+        let result = {};
         if (error) {
             console.error('Error retrieving identity:', error);
-        } else {
-            res.json({'contact':processQueryResult(identity[0])});
+        } else if(identity[0]!= undefined){
+            result = processQueryResult(identity[0]);
         }
+        res.json({'contact': result});
     });    
 });
 
