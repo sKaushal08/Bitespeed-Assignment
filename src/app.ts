@@ -17,6 +17,19 @@ connection.connect((err: any) => {
     console.log('Connected to Amazon RDS');
 });
 
+const executeQuery = (query: string): Promise<any[]> => {
+    return new Promise((resolve, reject) => {
+      connection.query(query, (error, results) => {
+        if (error) {
+          console.error('Error executing the query:', error);
+          reject(error);
+        } else {
+          resolve(results);
+        }
+      });
+    });
+  };
+
 const processQueryResult = (queryResult:any) => {
     const {primaryContactId, emails, phoneNumbers, secondaryContactIds} = queryResult;
     
@@ -33,33 +46,29 @@ const processQueryResult = (queryResult:any) => {
         }
     }
     return {
-        'primaryContactId': primaryContactId,
+        'primaryContactId': primaryContactId as number,
         'emails': emailResult,
         'phoneNumbers': phoneNumberResult,
-        'secondaryContactIds': JSON.parse(secondaryContactIds) as number[]
+        'secondaryContactIds': JSON.parse(secondaryContactIds).filter((item: any) => item != primaryContactId) as number[]
     }
 }
 
 
 
 const app = express();
-
-app.get('/', (req: any, res: { send: (arg0: string) => void; }) => {
-    res.send('Hello, World!');
-});
 app.use(express.json());
 
-app.post('/identify', (req, res)=>{
+app.post('/identify', async(req, res)=>{
     const {email, phoneNumber} = req.body;
-    const query = `SELECT * FROM Contact WHERE email='${email}' OR phoneNumber=${phoneNumber} ORDER BY id`
-    const resultQuery = `SELECT 
-        c1.id AS primaryContactId, 
+    const query = `SELECT * FROM Contact WHERE email='${email}' OR phoneNumber="${phoneNumber}" ORDER BY id`
+    
+    const resultQuery = `SELECT c1.id AS primaryContactId, 
         JSON_ARRAYAGG(c2.email) AS emails, 
         JSON_ARRAYAGG(c2.phoneNumber) AS phoneNumbers, 
         JSON_ARRAYAGG(c2.id) AS secondaryContactIds 
-    FROM  Contact c1 LEFT JOIN  Contact c2 ON (c2.linkedId = c1.id or c2.id = c1.id) 
-    WHERE c1.email = '${email}' or c1.phoneNumber = ${phoneNumber} 
-    GROUP BY c1.id;`
+    FROM  Contact c1 LEFT JOIN Contact c2 ON c1.id = c2.linkedId or c1.id = c2.id
+    WHERE (c1.email = '${email}' OR c1.phoneNumber = '${phoneNumber}') OR c1.linkedId = (SELECT linkedId From Contact Where email = '${email}' OR phoneNumber = "${phoneNumber}" Limit 1)
+    GROUP BY c1.linkedId;`
     
     const getIdentity = (callback: any) => {
         connection.query(resultQuery, (error, response) => {
@@ -75,48 +84,48 @@ app.post('/identify', (req, res)=>{
     };
 
     const getCountToUpdate = (callback: any) => {
-        connection.query(`SELECT COUNT(*) - 2 AS count FROM Contact WHERE email = '${email}' OR phoneNumber = ${phoneNumber}`, (err: any, results: any) => {
+        connection.query(`SELECT COUNT(*) - 2 AS count FROM Contact WHERE email = '${email}' OR phoneNumber = "${phoneNumber}"`, (err: any, results: any) => {
             console.log('Count Query start', results[0]['count']);
             callback(results[0]['count']);
         });
     };
 
-    connection.query(query, (err: any, results: any) => {
-        if (err) {
-            console.error('Error executing the query:', err);
-        } else if(results.length == 0){
-            connection.query(`INSERT INTO Contact (email, phoneNumber, linkPrecedence) VALUES ('${email}', ${phoneNumber}, 'primary')`)
-        } else {
-            connection.query(`INSERT INTO Contact (email, phoneNumber, linkPrecedence, linkedId) VALUES ('${email}', ${phoneNumber}, 'secondary', ${results[0].linkPrecedence == 'primary' ? results[0].id : results[0].linkedId})`)
-        }
-    });
+    const results: any[] = await executeQuery(query);
+    if (results.length == 0) {
+      await executeQuery(
+        `INSERT INTO Contact (email, phoneNumber, linkPrecedence) VALUES ('${email}', "${phoneNumber}", 'primary')`
+      );
+    } else {
+      await executeQuery(
+        `INSERT INTO Contact (email, phoneNumber, linkPrecedence, linkedId) VALUES ('${email}', "${phoneNumber}", 'secondary', ${results[0].linkPrecedence == 'primary' ? results[0].id : results[0].linkedId})`
+      );
+    }
 
-    getCountToUpdate((count: any)=>{
+    getCountToUpdate(async(count: any)=>{
         if (count != null && count>=0){
-            connection.query(`WITH headSubquery AS (
+            await executeQuery(`WITH headSubquery AS (
                 SELECT 
                 CASE
                     WHEN (SELECT linkedId
                         FROM (SELECT DISTINCT linkedId
                             FROM Contact
-                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}") AND linkedId is not null
                             ORDER BY linkedId
                             LIMIT 1) AS subquery) IS NULL
                     THEN (SELECT id as variable
                           FROM (SELECT DISTINCT id
                                 FROM Contact
-                                WHERE email = "${email}" OR phoneNumber = ${phoneNumber}
+                                WHERE email = "${email}" OR phoneNumber = "${phoneNumber}"
                                 ORDER BY id
                                 LIMIT 1) AS subquery)
                     ELSE (SELECT linkedId as variable
                         FROM (SELECT DISTINCT linkedId
                             FROM Contact
-                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}") AND linkedId is not null
                             ORDER BY linkedId
                             LIMIT 1) AS subquery)
                 END as variable
             )
-            
             
             UPDATE Contact
             SET linkedId = (
@@ -128,60 +137,61 @@ app.post('/identify', (req, res)=>{
                     FROM (
                         SELECT id as linkedId
                         FROM Contact
-                        WHERE (email = "${email}" OR phoneNumber = ${phoneNumber})
-                        ORDER BY linkedId
+                        WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}")
+                        
+                        UNION
+                        
+                        SELECT linkedId
+                        FROM Contact
+                        WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}")
                     ) AS subquery
+                    ORDER BY linkedId
+                OR id IN (
+                    SELECT id
+                    FROM (
+                        SELECT id
+                        FROM Contact
+                        WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}")
+                        
+                        UNION
+                        
+                        SELECT linkedId as id
+                        FROM Contact
+                        WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}")
+                    ) AS subquery
+                    )
                 )
                 OR 
-                ((email = "${email}" OR phoneNumber = ${phoneNumber}) AND 
+                ((email = "${email}" OR phoneNumber = "${phoneNumber}") AND 
                 (linkPrecedence = 'primary' AND id != (select variable from headSubquery))
-            ));`, (err: any, results: any) => {
-                console.log('Secondary Update Query start');
-                if (err) {
-                    console.error('Error executing the query:', err);
-                    return
-                } else {
-                    console.log('update query results', results);
-                }
-                console.log('Secondary Update Query end', count);
-            });
+            ));`);
 
-            connection.query(`UPDATE Contact SET linkPrecedence = 'secondary' 
-            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber})
+            await executeQuery(`UPDATE Contact SET linkPrecedence = 'secondary' 
+            WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}")
             AND (linkPrecedence = 'primary' AND id != (
                 SELECT 
                 CASE
                     WHEN (SELECT linkedId
                         FROM (SELECT DISTINCT linkedId
                             FROM Contact
-                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}") AND linkedId is not null
                             ORDER BY linkedId
                             LIMIT 1) AS subquery) IS NULL
                     THEN (SELECT id as variable
                           FROM (SELECT DISTINCT id
                                 FROM Contact
-                                WHERE email = "${email}" OR phoneNumber = ${phoneNumber}
+                                WHERE email = "${email}" OR phoneNumber = "${phoneNumber}"
                                 ORDER BY id
                                 LIMIT 1) AS subquery)
                     ELSE (SELECT linkedId as variable
                         FROM (SELECT DISTINCT linkedId
                             FROM Contact
-                            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber}) AND linkedId is not null
+                            WHERE (email = "${email}" OR phoneNumber = "${phoneNumber}") AND linkedId is not null
                             ORDER BY linkedId
                             LIMIT 1) AS subquery)
                 END
-            ));`, (err: any, results: any) => {
-                console.log('Second Secondary Update Query start');
-                if (err) {
-                    console.error('Error executing the query:', err);
-                    return
-                } else {
-                    console.log('update query results', results);
-                }
-                console.log('Second Secondary Update Query end');
-            });
+            ));`);
         }
-        console.log('Count Query end', count);
     });
     
 
