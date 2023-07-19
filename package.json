@@ -6,7 +6,6 @@
   "scripts": {
     "start": "nodemon --exitcrash --signal SIGINT -e ts --exec ts-node src/app.ts"
   },
-  
   "author": "",
   "license": "ISC",
   "devDependencies": {
@@ -18,6 +17,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "mysql": "^2.18.1",
+    "mysql2": "^3.5.2",
     "nodemon": "^3.0.1"
   }
 }

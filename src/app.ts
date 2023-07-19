@@ -1,12 +1,12 @@
 import express from 'express';
-import { MysqlError, createConnection } from 'mysql';
+import { createConnection } from 'mysql';
 
 const connection = createConnection({
-    host: 'localhost',
+    host: 'database-1.cykz2htoubcv.ap-south-1.rds.amazonaws.com',
     port: 3306,
-    user: process.env.MYSQL_USER,
-    password: process.env.MYSQL_PASSWORD,
-    database: process.env.MYSQL_DB,
+    user: 'root',
+    password: 'Qwerty1234',
+    database: 'bitespeed'
   });
   
 connection.connect((err: any) => {
@@ -14,7 +14,7 @@ connection.connect((err: any) => {
         console.error('Error connecting to the database:', err);
         return;
     }
-    console.log('Connected to the MySQL database');
+    console.log('Connected to Amazon RDS');
 });
 
 const processQueryResult = (queryResult:any) => {
@@ -75,14 +75,13 @@ app.post('/identify', (req, res)=>{
     };
 
     const getCountToUpdate = (callback: any) => {
-        connection.query(`SELECT COUNT(*) - 2 FROM Contact WHERE email = '${email}' OR phoneNumber = ${phoneNumber}`, (count: any) => {
-            console.log('Count Query start', count);
-            callback(count);
+        connection.query(`SELECT COUNT(*) - 2 AS count FROM Contact WHERE email = '${email}' OR phoneNumber = ${phoneNumber}`, (err: any, results: any) => {
+            console.log('Count Query start', results[0]['count']);
+            callback(results[0]['count']);
         });
     };
 
     connection.query(query, (err: any, results: any) => {
-        console.log('Insert Query start');
         if (err) {
             console.error('Error executing the query:', err);
         } else if(results.length == 0){
@@ -90,7 +89,6 @@ app.post('/identify', (req, res)=>{
         } else {
             connection.query(`INSERT INTO Contact (email, phoneNumber, linkPrecedence, linkedId) VALUES ('${email}', ${phoneNumber}, 'secondary', ${results[0].linkPrecedence == 'primary' ? results[0].id : results[0].linkedId})`)
         }
-        console.log('Insert Query end');
     });
 
     getCountToUpdate((count: any)=>{
@@ -101,43 +99,30 @@ app.post('/identify', (req, res)=>{
                 FROM (
                     SELECT DISTINCT c1.linkedId AS linkedId
                     FROM Contact c1
-                    WHERE c1.email = '${email}' OR c1.phoneNumber = ${phoneNumber}
+                    WHERE c1.email = "${email}" OR c1.phoneNumber = ${phoneNumber}
                     ORDER BY c1.linkedId
                     LIMIT 1 OFFSET 1
                 ) AS subquery
             )
-            WHERE (email = '${email}' OR phoneNumber = ${phoneNumber})
-            AND linkedId IN (
+            WHERE (email = "${email}" OR phoneNumber = ${phoneNumber})
+            AND (linkedId IN (
                 SELECT linkedIds
                 FROM (
                     SELECT DISTINCT c1.linkedId AS linkedIds
                     FROM Contact c1
-                    WHERE c1.email = '${email}' OR c1.phoneNumber = ${phoneNumber}
+                    WHERE c1.email = "${email}" OR c1.phoneNumber = ${phoneNumber}
                     ORDER BY c1.linkedId
                     LIMIT 2, ${count}
-                ) AS subquery) OR (linkPrecedence = 'primary' AND linkedId != (
+                ) AS subquery) OR (linkPrecedence = 'primary' AND id != (
                 SELECT linkedId
                 FROM (
                     SELECT DISTINCT c1.linkedId AS linkedId
                     FROM Contact c1
-                    WHERE c1.email = '${email}' OR c1.phoneNumber = ${phoneNumber}
+                    WHERE c1.email = "${email}" OR c1.phoneNumber = ${phoneNumber}
                     ORDER BY c1.linkedId
                     LIMIT 1 OFFSET 1
                 ) AS subquery
-                ))); 
-                UPDATE Contact SET linkPrecedence = 'secondary' 
-                WHERE email = '${email}' OR phoneNumber = ${phoneNumber}
-                AND (linkPrecedence = 'primary' AND linkedId != (
-                    SELECT linkedId
-                    FROM (
-                        SELECT DISTINCT c1.linkedId AS linkedId
-                        FROM Contact c1
-                        WHERE c1.email = '${email}' OR c1.phoneNumber = ${phoneNumber}
-                        ORDER BY c1.linkedId
-                        LIMIT 1 OFFSET 1
-                    ) AS subquery
-                ));
-                `, (err: any, results: any) => {
+            ))); `, (err: any, results: any) => {
                 console.log('Secondary Update Query start');
                 if (err) {
                     console.error('Error executing the query:', err);
@@ -146,6 +131,28 @@ app.post('/identify', (req, res)=>{
                     console.log('update query results', results);
                 }
                 console.log('Secondary Update Query end', count);
+            });
+
+            connection.query(`UPDATE Contact SET linkPrecedence = 'secondary' 
+                WHERE email = '${email}' OR phoneNumber = ${phoneNumber}
+                AND (linkPrecedence = 'primary' AND id != (
+                    SELECT linkedId
+                    FROM (
+                        SELECT DISTINCT c1.linkedId AS linkedId
+                        FROM Contact c1
+                        WHERE c1.email = '${email}' OR c1.phoneNumber = ${phoneNumber}
+                        ORDER BY c1.linkedId
+                        LIMIT 1 OFFSET 1
+                    ) AS subquery
+                ));`, (err: any, results: any) => {
+                console.log('Second Secondary Update Query start');
+                if (err) {
+                    console.error('Error executing the query:', err);
+                    return
+                } else {
+                    console.log('update query results', results);
+                }
+                console.log('Second Secondary Update Query end');
             });
         }
         console.log('Count Query end', count);
