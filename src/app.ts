@@ -1,13 +1,15 @@
 import express from 'express';
 import { createConnection } from 'mysql';
+require('dotenv').config();
+
 
 const connection = createConnection({
-    host: 'database-1.cykz2htoubcv.ap-south-1.rds.amazonaws.com',
-    port: 3306,
-    user: 'root',
-    password: 'Qwerty1234',
-    database: 'bitespeed'
-  });
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : undefined,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE
+});
   
 connection.connect((err: any) => {
     if (err) {
