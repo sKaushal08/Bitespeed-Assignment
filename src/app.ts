@@ -74,20 +74,17 @@ app.post('/identify', async(req, res)=>{
     
     const getIdentity = (callback: any) => {
         connection.query(resultQuery, (error, response) => {
-            console.log('Result Query start');
             if (error) {
                 console.error('Error executing the query:', error);
                 callback(error, null);
             } else {
                 callback(null, response);
             }
-            console.log('Result Query end');
         });
     };
 
     const getCountToUpdate = (callback: any) => {
         connection.query(`SELECT COUNT(*) - 2 AS count FROM Contact WHERE email = '${email}' OR phoneNumber = "${phoneNumber}"`, (err: any, results: any) => {
-            console.log('Count Query start', results[0]['count']);
             callback(results[0]['count']);
         });
     };
